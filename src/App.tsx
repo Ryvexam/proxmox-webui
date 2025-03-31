@@ -14,8 +14,8 @@ interface Quota {
 }
 
 interface UserProfile {
-  email: string;
   role: string;
+  description: string;
 }
 
 interface Network {
@@ -42,16 +42,16 @@ interface VM {
 }
 
 // Type-safe object definitions
-const DEFAULT_QUOTAS: Record<string, Quota> = {
+const ROLE_QUOTAS: Record<string, Quota> = {
   admin: { ram: 32768, storage: 250 },
-  user: { ram: 30720, storage: 200 },
-  invited: { ram: 2048, storage: 50 }
+  developer: { ram: 16384, storage: 150 },
+  user: { ram: 8192, storage: 100 },
 };
 
-const USER_PROFILES: Record<string, UserProfile> = {
-  admin: { email: "maxime.very@hesias.fr", role: "Administrateur" },
-  user: { email: "romain.chatonnier@hesias.fr", role: "Développeur" },
-  invited: { email: "Invité", role: "Utilisateur" }
+const ROLE_PROFILES: Record<string, UserProfile> = {
+  admin: { role: "administrator", description: "Full system access" },
+  developer: { role: "developer", description: "Extended VM resources" },
+  user: { role: "user", description: "Standard VM resources" },
 };
 
 function getOsIcon(os: string): string {
@@ -85,24 +85,29 @@ function VMManager() {
   const [vmList, setVmList] = useState<VM[]>([]);
   const [vmCounter, setVmCounter] = useState<number>(100);
   const [showConfirm, setShowConfirm] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
   // Get user identification from Clerk
-  const userIdOrUsername = user?.emailAddresses || "invited";
   const userEmail = user?.primaryEmailAddress?.emailAddress || "No email";
+  
+  // Get user role from metadata
+  const userRole = (user?.publicMetadata?.role as string);
+  
+  // Get quotas based on role
+  const quotas = ROLE_QUOTAS[userRole];
+  const profile = ROLE_PROFILES[userRole];
 
-  // Safe access to objects with string keys - Use Clerk user info
-  const userKey = userIdOrUsername as keyof typeof DEFAULT_QUOTAS;
-  const quotas = DEFAULT_QUOTAS[userKey] || DEFAULT_QUOTAS["invited"];
-  const profile = {
-    ...USER_PROFILES[userKey] || USER_PROFILES["invited"],
-    // Override with actual user data if available
-    nom: userEmail, // Now showing email instead of name
-    role: USER_PROFILES[userKey]?.role || "Utilisateur"
-  };
-
-  const userVMs = useMemo(() => vmList.filter(vm => vm.owner === userIdOrUsername), [vmList, userIdOrUsername]);
+  const userVMs = useMemo(() => vmList.filter(vm => vm.owner === userEmail), [vmList, userEmail]);
   const usedRam = useMemo(() => userVMs.reduce((acc, vm) => acc + vm.ram, 0), [userVMs]);
   const usedDisk = useMemo(() => userVMs.reduce((acc, vm) => acc + vm.disk + (vm.storages?.reduce((sAcc: number, s: Storage) => sAcc + s.size, 0) || 0), 0), [userVMs]);
+
+  // Check if current request would exceed quota limits
+  const wouldExceedQuota = (ramRequest: number, diskRequest: number): boolean => {
+    const totalRamRequest = usedRam + ramRequest;
+    const totalDiskRequest = usedDisk + diskRequest;
+    
+    return totalRamRequest > quotas.ram || totalDiskRequest > quotas.storage;
+  };
 
   useEffect(() => {
     setOsList([
@@ -122,6 +127,7 @@ function VMManager() {
           <h2 className="text-lg font-semibold">Mon Profil</h2>
           <p><strong>Email :</strong> {userEmail}</p>
           <p><strong>Rôle :</strong> {profile.role}</p>
+          <p><strong>Description :</strong> {profile.description}</p>
           <p><strong>Quota RAM :</strong> {usedRam} / {quotas.ram} Mo</p>
           <Progress value={(usedRam / quotas.ram) * 100} className="h-2" />
           <p><strong>Quota Stockage :</strong> {usedDisk} / {quotas.storage} Go</p>
@@ -207,10 +213,21 @@ function VMManager() {
             </Button>
           </div>
 
-          <Button onClick={() => setShowConfirm(true)} disabled={isCreating}>
+          <Button onClick={() => {
+            // Calculate total disk size including additional storage
+            const totalDiskSize = vmDisk + storages.reduce((total, s) => total + s.size, 0);
+            
+            if (wouldExceedQuota(vmRam, totalDiskSize)) {
+              setErrorMessage("La création de cette VM dépasserait vos quotas alloués");
+            } else {
+              setErrorMessage("");
+              setShowConfirm(true);
+            }
+          }} disabled={isCreating}>
             {isCreating ? "Création..." : "Créer la VM"}
           </Button>
-          {message && <p className="text-sm mt-2">{message}</p>}
+          {message && <p className="text-sm mt-2 text-green-600">{message}</p>}
+          {errorMessage && <p className="text-sm mt-2 text-red-600">{errorMessage}</p>}
         </CardContent>
       </Card>
 
@@ -274,7 +291,7 @@ function VMManager() {
                 networks,
                 storages,
                 status: "stopped",
-                owner: userIdOrUsername
+                owner: userEmail
               };
               setVmList(prev => [...prev, newVM]);
               setVmCounter(prev => prev + 1);
