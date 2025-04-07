@@ -14,8 +14,8 @@ interface Quota {
 }
 
 interface UserProfile {
+  email: string;
   role: string;
-  description: string;
 }
 
 interface Network {
@@ -42,32 +42,32 @@ interface VM {
 }
 
 // Type-safe object definitions
-const ROLE_QUOTAS: Record<string, Quota> = {
+const DEFAULT_QUOTAS: Record<string, Quota> = {
   admin: { ram: 32768, storage: 250 },
-  developer: { ram: 16384, storage: 150 },
-  user: { ram: 8192, storage: 100 },
+  user: { ram: 30720, storage: 200 },
+  invited: { ram: 2048, storage: 50 }
 };
 
-const ROLE_PROFILES: Record<string, UserProfile> = {
-  admin: { role: "administrator", description: "Full system access" },
-  developer: { role: "developer", description: "Extended VM resources" },
-  user: { role: "user", description: "Standard VM resources" },
+const USER_PROFILES: Record<string, UserProfile> = {
+  admin: { email: "maxime.very@hesias.fr", role: "Administrateur" },
+  user: { email: "romain.chatonnier@hesias.fr", role: "Développeur" },
+  invited: { email: "Invité", role: "Utilisateur" }
 };
 
 function getOsIcon(os: string): string {
   const name = os.toLowerCase();
   if (name.includes("ubuntu")) return "https://companieslogo.com/img/orig/ubuntu-ace93e08.png";
   if (name.includes("debian")) return "https://companieslogo.com/img/orig/debian-7e44a05f.png";
-  if (name.includes("centos")) return "https://upload.wikimedia.org/wikipedia/commons/9/9e/CentOS_Mark.svg";
+  if (name.includes("centos")) return "https://upload.wikimedia.org/wikipedia/commons/thumb/6/63/CentOS_color_logo.svg/2048px-CentOS_color_logo.svg.png";
   if (name.includes("windows")) {
-    if (name.includes("xp")) return "https://upload.wikimedia.org/wikipedia/commons/3/32/Windows_XP_logo.svg";
-    if (name.includes("7")) return "https://upload.wikimedia.org/wikipedia/commons/3/34/Windows_7_logo.svg";
-    if (name.includes("vista")) return "https://upload.wikimedia.org/wikipedia/commons/0/0e/Windows_Vista_logo.svg";
-    if (name.includes("10")) return "https://companieslogo.com/img/orig/MSFT-a203b22d.png";
-    if (name.includes("11")) return "https://companieslogo.com/img/orig/MSFT-a203b22d.png";
-    return "https://upload.wikimedia.org/wikipedia/commons/5/5f/Windows_logo_-_2002.svg";
+    if (name.includes("xp")) return "https://e7.pngegg.com/pngimages/668/511/png-clipart-windows-xp-microsoft-windows-operating-system-windows-text-logo.png";
+    if (name.includes("7")) return "https://w7.pngwing.com/pngs/567/690/png-transparent-windows-logo-windows-7-logo-windows-vista-microsoft-orange-computer-wallpaper-sphere-thumbnail.png";
+    if (name.includes("vista")) return "https://upload.wikimedia.org/wikinews/en/f/f2/Windows_Vista_logo.png";
+    if (name.includes("10")) return "https://upload.wikimedia.org/wikipedia/commons/thumb/4/48/Windows_logo_-_2012_%28dark_blue%29.svg/768px-Windows_logo_-_2012_%28dark_blue%29.svg.png";
+    if (name.includes("11")) return "https://w7.pngwing.com/pngs/685/385/png-transparent-windows-11.png";
+    return "https://img.icons8.com/color/600/proxmox.png";
   }
-  return "https://upload.wikimedia.org/wikipedia/commons/6/6a/Blank_Circle.svg";
+  return "https://static.vecteezy.com/system/resources/thumbnails/021/048/718/small_2x/geometric-design-element-free-png.png";
 }
 
 function VMManager() {
@@ -85,29 +85,24 @@ function VMManager() {
   const [vmList, setVmList] = useState<VM[]>([]);
   const [vmCounter, setVmCounter] = useState<number>(100);
   const [showConfirm, setShowConfirm] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string>("");
 
   // Get user identification from Clerk
+  const userIdOrUsername = user?.id || "invited";
   const userEmail = user?.primaryEmailAddress?.emailAddress || "No email";
-  
-  // Get user role from metadata
-  const userRole = (user?.publicMetadata?.role as string);
-  
-  // Get quotas based on role
-  const quotas = ROLE_QUOTAS[userRole];
-  const profile = ROLE_PROFILES[userRole];
 
-  const userVMs = useMemo(() => vmList.filter(vm => vm.owner === userEmail), [vmList, userEmail]);
+  // Safe access to objects with string keys - Use Clerk user info
+  const userKey = userIdOrUsername as keyof typeof DEFAULT_QUOTAS;
+  const quotas = DEFAULT_QUOTAS[userKey] || DEFAULT_QUOTAS["invited"];
+  const profile = {
+    ...USER_PROFILES[userKey] || USER_PROFILES["invited"],
+    // Override with actual user data if available
+    nom: userEmail, // Now showing email instead of name
+    role: USER_PROFILES[userKey]?.role || "Utilisateur"
+  };
+
+  const userVMs = useMemo(() => vmList.filter(vm => vm.owner === userIdOrUsername), [vmList, userIdOrUsername]);
   const usedRam = useMemo(() => userVMs.reduce((acc, vm) => acc + vm.ram, 0), [userVMs]);
   const usedDisk = useMemo(() => userVMs.reduce((acc, vm) => acc + vm.disk + (vm.storages?.reduce((sAcc: number, s: Storage) => sAcc + s.size, 0) || 0), 0), [userVMs]);
-
-  // Check if current request would exceed quota limits
-  const wouldExceedQuota = (ramRequest: number, diskRequest: number): boolean => {
-    const totalRamRequest = usedRam + ramRequest;
-    const totalDiskRequest = usedDisk + diskRequest;
-    
-    return totalRamRequest > quotas.ram || totalDiskRequest > quotas.storage;
-  };
 
   useEffect(() => {
     setOsList([
@@ -119,7 +114,7 @@ function VMManager() {
   }, []);
 
   return (
-    <div className="w-screen p-4 space-y-6">
+    <div className="w-screen p-4 space-y-6 text-foreground">
       <h1 className="text-2xl font-bold">Créer une VM Proxmox</h1>
 
       <Card>
@@ -127,7 +122,6 @@ function VMManager() {
           <h2 className="text-lg font-semibold">Mon Profil</h2>
           <p><strong>Email :</strong> {userEmail}</p>
           <p><strong>Rôle :</strong> {profile.role}</p>
-          <p><strong>Description :</strong> {profile.description}</p>
           <p><strong>Quota RAM :</strong> {usedRam} / {quotas.ram} Mo</p>
           <Progress value={(usedRam / quotas.ram) * 100} className="h-2" />
           <p><strong>Quota Stockage :</strong> {usedDisk} / {quotas.storage} Go</p>
@@ -138,96 +132,90 @@ function VMManager() {
       <Card>
         <CardContent className="space-y-4 pt-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Nom de la VM</label>
+            <label className="block text-sm font-medium mb-1 text-foreground">Nom de la VM</label>
             <Input value={vmName} onChange={e => setVmName(e.target.value)} />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Système d'exploitation</label>
+            <label className="block text-sm font-medium mb-1 text-foreground">Système d'exploitation</label>
             <Select onValueChange={setSelectedOS}>
-              <SelectTrigger>
-                <SelectValue placeholder="Choisir un OS" />
+              <SelectTrigger className="border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground">
+                <SelectValue placeholder="Choisir un OS" className="text-foreground" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="bg-popover border border-input">
                 {osList.map(os => (
-                  <SelectItem key={os} value={os}>{os}</SelectItem>
+                  <SelectItem key={os} value={os} className="text-popover-foreground hover:bg-accent hover:text-accent-foreground">
+                    {os}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">CPU (coeurs)</label>
-            <Input type="number" value={vmCores} onChange={e => setVmCores(Number(e.target.value))} min={1} />
+            <label className="block text-sm font-medium mb-1 text-foreground">CPU (coeurs)</label>
+            <Input type="number" value={vmCores} onChange={e => setVmCores(Number(e.target.value))} min={1} className="text-foreground" />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">RAM (Mo)</label>
-            <Input type="number" value={vmRam} onChange={e => setVmRam(Number(e.target.value))} min={512} />
+            <label className="block text-sm font-medium mb-1 text-foreground">RAM (Mo)</label>
+            <Input type="number" value={vmRam} onChange={e => setVmRam(Number(e.target.value))} min={512} className="text-foreground" />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Disque principal (Go)</label>
-            <Input type="number" value={vmDisk} onChange={e => setVmDisk(Number(e.target.value))} min={5} />
+            <label className="block text-sm font-medium mb-1 text-foreground">Disque principal (Go)</label>
+            <Input type="number" value={vmDisk} onChange={e => setVmDisk(Number(e.target.value))} min={5} className="text-foreground" />
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium">Cartes réseau</label>
+            <label className="block text-sm font-medium text-foreground">Cartes réseau</label>
             {networks.map((net, i) => (
               <div key={i} className="flex gap-2">
-                <Input className="flex-1" value={net.bridge} onChange={e => {
+                <Input className="flex-1 text-foreground" value={net.bridge} onChange={e => {
                   const updated = [...networks];
                   updated[i].bridge = e.target.value;
                   setNetworks(updated);
                 }} placeholder="Bridge (ex: vmbr0)" />
-                <Input className="flex-1" value={net.model} onChange={e => {
+                <Input className="flex-1 text-foreground" value={net.model} onChange={e => {
                   const updated = [...networks];
                   updated[i].model = e.target.value;
                   setNetworks(updated);
                 }} placeholder="Modèle (ex: virtio)" />
               </div>
             ))}
-            <Button type="button" onClick={() => setNetworks([...networks, { bridge: "vmbr0", model: "virtio" }])}>
+            <Button type="button" onClick={() => setNetworks([...networks, { bridge: "vmbr0", model: "virtio" }])} 
+              className="bg-primary text-primary-foreground hover:bg-primary/90">
               ➕ Ajouter une carte réseau
             </Button>
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium">Stockage supplémentaire (optionnel)</label>
+            <label className="block text-sm font-medium text-foreground">Stockage supplémentaire (optionnel)</label>
             {storages.map((s, i) => (
               <div key={i} className="flex gap-2">
-                <Input className="flex-1" type="number" value={s.size} onChange={e => {
+                <Input className="flex-1 text-foreground" type="number" value={s.size} onChange={e => {
                   const updated = [...storages];
                   updated[i].size = Number(e.target.value);
                   setStorages(updated);
                 }} placeholder="Taille (Go)" />
-                <Input className="flex-1" value={s.storage} onChange={e => {
+                <Input className="flex-1 text-foreground" value={s.storage} onChange={e => {
                   const updated = [...storages];
                   updated[i].storage = e.target.value;
                   setStorages(updated);
                 }} placeholder="Nom du stockage (ex: local-lvm)" />
               </div>
             ))}
-            <Button type="button" onClick={() => setStorages([...storages, { size: 10, storage: "local-lvm" }])}>
+            <Button type="button" onClick={() => setStorages([...storages, { size: 10, storage: "local-lvm" }])}
+              className="bg-primary text-primary-foreground hover:bg-primary/90">
               ➕ Ajouter un disque
             </Button>
           </div>
 
-          <Button onClick={() => {
-            // Calculate total disk size including additional storage
-            const totalDiskSize = vmDisk + storages.reduce((total, s) => total + s.size, 0);
-            
-            if (wouldExceedQuota(vmRam, totalDiskSize)) {
-              setErrorMessage("La création de cette VM dépasserait vos quotas alloués");
-            } else {
-              setErrorMessage("");
-              setShowConfirm(true);
-            }
-          }} disabled={isCreating}>
+          <Button onClick={() => setShowConfirm(true)} disabled={isCreating}
+            className="bg-primary text-primary-foreground hover:bg-primary/90">
             {isCreating ? "Création..." : "Créer la VM"}
           </Button>
-          {message && <p className="text-sm mt-2 text-green-600">{message}</p>}
-          {errorMessage && <p className="text-sm mt-2 text-red-600">{errorMessage}</p>}
+          {message && <p className="text-sm mt-2 font-medium text-green-600 dark:text-green-400">{message}</p>}
         </CardContent>
       </Card>
 
@@ -240,9 +228,9 @@ function VMManager() {
                 <img src={getOsIcon(vm.os)} alt={vm.os} className="w-6 h-6 object-contain" />
                 <div>
                   <h3 className="text-lg font-semibold">{vm.name}</h3>
-                  <p className="text-sm text-gray-500">{vm.os} — {vm.cores} CPU, {vm.ram} Mo RAM</p>
-                  <p className="text-sm text-gray-500">Disque : {vm.disk} Go + {vm.storages?.reduce((a: number, s: Storage) => a + s.size, 0)} Go</p>
-                  <p className={`text-xs font-semibold ${vm.status === 'running' ? 'text-green-600' : 'text-red-600'}`}>
+                  <p className="text-sm text-muted-foreground">{vm.os} — {vm.cores} CPU, {vm.ram} Mo RAM</p>
+                  <p className="text-sm text-muted-foreground">Disque : {vm.disk} Go + {vm.storages?.reduce((a: number, s: Storage) => a + s.size, 0)} Go</p>
+                  <p className={`text-xs font-semibold ${vm.status === 'running' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     {vm.status === 'running' ? '🟢 En cours' : '🔴 Arrêtée'} — 👤 {vm.owner}
                   </p>
                 </div>
@@ -250,12 +238,12 @@ function VMManager() {
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => {
                   setVmList(prev => prev.map(v => v.vmid === vm.vmid ? { ...v, status: v.status === "running" ? "stopped" : "running" } : v));
-                }}>
+                }} className="border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground">
                   {vm.status === 'running' ? 'Arrêter' : 'Démarrer'}
                 </Button>
                 <Button variant="destructive" onClick={() => {
                   setVmList(prev => prev.filter(v => v.vmid !== vm.vmid));
-                }}>
+                }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                   Supprimer
                 </Button>
               </div>
@@ -269,7 +257,7 @@ function VMManager() {
           <DialogHeader>
             <DialogTitle>Confirmer la création de la VM</DialogTitle>
           </DialogHeader>
-          <div className="text-sm space-y-1">
+          <div className="text-sm space-y-1 text-foreground">
             <p><strong>Nom :</strong> {vmName}</p>
             <p><strong>OS :</strong> {selectedOS}</p>
             <p><strong>CPU :</strong> {vmCores} coeurs</p>
@@ -279,7 +267,10 @@ function VMManager() {
             <p><strong>Cartes réseau :</strong> {networks.length}</p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowConfirm(false)}>Annuler</Button>
+            <Button variant="outline" onClick={() => setShowConfirm(false)} 
+              className="border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground">
+              Annuler
+            </Button>
             <Button onClick={() => {
               const newVM: VM = {
                 vmid: vmCounter,
@@ -291,14 +282,16 @@ function VMManager() {
                 networks,
                 storages,
                 status: "stopped",
-                owner: userEmail
+                owner: userIdOrUsername
               };
               setVmList(prev => [...prev, newVM]);
               setVmCounter(prev => prev + 1);
               setMessage(`✅ VM simulée avec succès : ${newVM.vmid}`);
               setIsCreating(false);
               setShowConfirm(false);
-            }}>Confirmer</Button>
+            }} className="bg-primary text-primary-foreground hover:bg-primary/90">
+              Confirmer
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -308,8 +301,8 @@ function VMManager() {
 
 export default function App() {
   return (
-    <div>
-      <header className="p-4 flex justify-end">
+    <div className="text-foreground bg-background min-h-screen">
+      <header className="p-4 flex justify-end items-center">
         <SignedOut>
           <SignInButton />
         </SignedOut>
@@ -325,9 +318,11 @@ export default function App() {
         <SignedOut>
           <div className="flex flex-col items-center justify-center h-[80vh] text-center p-4">
             <h2 className="text-2xl font-bold mb-4">Accès restreint</h2>
-            <p className="mb-6">Vous devez vous connecter pour accéder au gestionnaire de VM Proxmox</p>
+            <p className="mb-6 text-muted-foreground">Vous devez vous connecter pour accéder au gestionnaire de VM Proxmox</p>
             <SignInButton mode="modal">
-              <Button size="lg">Se connecter</Button>
+              <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90">
+                Se connecter
+              </Button>
             </SignInButton>
           </div>
         </SignedOut>
